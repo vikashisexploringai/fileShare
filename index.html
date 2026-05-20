@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AirShare · Fixed WebRTC</title>
+    <title>AirShare · Working WebRTC</title>
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body {
@@ -37,13 +37,13 @@
 <body>
 <div class="container">
     <div class="header">
-        <h1>⚡ AirShare · Fixed WebRTC</h1>
-        <div class="badge">🔐 Same-device & cross-device working</div>
+        <h1>⚡ AirShare · Working WebRTC</h1>
+        <div class="badge">🔐 Fixed data channel connection</div>
     </div>
 
     <div class="role-selector">
-        <button class="role-btn" id="senderRoleBtn">📤 I'm Sender (Share file)</button>
-        <button class="role-btn" id="receiverRoleBtn">📥 I'm Receiver (Get file)</button>
+        <button class="role-btn" id="senderRoleBtn">📤 Sender</button>
+        <button class="role-btn" id="receiverRoleBtn">📥 Receiver</button>
     </div>
 
     <div id="senderPanel" class="panel">
@@ -56,7 +56,7 @@
         <button id="createCodeBtn" style="width: 100%; margin: 0.5rem 0;">🔗 Generate Share Code</button>
         <div id="codeArea" style="display: none;">
             <div class="code-card">
-                <p>📢 Share this code with receiver:</p>
+                <p>📢 Share this code:</p>
                 <div class="big-code" id="displayCode">----</div>
                 <button id="copyCodeBtn">📋 Copy Code</button>
             </div>
@@ -76,12 +76,11 @@
         <div id="downloadArea" style="display: none;">
             <button id="downloadBtn" disabled style="width: 100%; margin: 1rem 0;">⬇️ Download File</button>
         </div>
-        <div class="log" id="receiverLog">📭 Enter code to receive file.\n</div>
+        <div class="log" id="receiverLog">📭 Enter code to receive.\n</div>
     </div>
 </div>
 
 <script type="module">
-    // Firebase Config
     const firebaseConfig = {
         apiKey: "AIzaSyBhujqx9CZwK_NUrQgcUEX5wxKS0hYjXKc",
         authDomain: "vikash-classes-c98f8.firebaseapp.com",
@@ -97,7 +96,6 @@
     const app = initializeApp(firebaseConfig);
     const db = getFirestore(app, 'shortener');
     
-    // WebRTC Config
     const configuration = {
         iceServers: [
             { urls: 'stun:stun.l.google.com:19302' },
@@ -105,14 +103,15 @@
         ]
     };
     
-    // State
     let peerConnection = null;
     let dataChannel = null;
     let currentCode = null;
     let selectedFile = null;
     let receivedChunks = [];
     let receivedMetadata = null;
-    let isSender = true;
+    let isSenderMode = true;
+    let unsubscribeAnswer = null;
+    let unsubscribeReceiverCandidates = null;
     
     // DOM
     const senderPanel = document.getElementById('senderPanel');
@@ -146,15 +145,24 @@
         return code;
     }
     
-    // SENDER: Create offer and store in Firebase
+    // Clean up Firebase listeners
+    function cleanupListeners() {
+        if (unsubscribeAnswer) { unsubscribeAnswer(); unsubscribeAnswer = null; }
+        if (unsubscribeReceiverCandidates) { unsubscribeReceiverCandidates(); unsubscribeReceiverCandidates = null; }
+    }
+    
+    // SENDER: Create offer
     async function createOffer(code) {
         if (peerConnection) peerConnection.close();
+        cleanupListeners();
         
         peerConnection = new RTCPeerConnection(configuration);
+        
+        // Create data channel BEFORE creating offer
         dataChannel = peerConnection.createDataChannel('fileTransfer');
         
         dataChannel.onopen = () => {
-            logSender('✅ Data channel OPEN! Receiver connected.');
+            logSender('🎉 DATA CHANNEL OPEN! Ready to send.');
             senderStatus.innerText = '✅ Connected! Click Send File.';
             sendFileBtn.disabled = false;
         };
@@ -162,22 +170,31 @@
         dataChannel.onclose = () => {
             logSender('⚠️ Data channel closed');
             sendFileBtn.disabled = true;
+            senderStatus.innerText = '⚠️ Connection lost';
         };
+        
+        dataChannel.onerror = (err) => logSender(`Channel error: ${err.message}`);
         
         peerConnection.onicecandidate = async (event) => {
             if (event.candidate) {
-                // Send candidate to Firebase
-                const candidateRef = doc(db, 'candidates', `${code}_sender`);
-                await setDoc(candidateRef, {
+                await setDoc(doc(db, 'candidates', `${code}_sender`), {
                     candidate: event.candidate,
                     timestamp: Date.now()
                 });
+                logSender(`ICE candidate sent`);
             } else {
                 logSender('✅ ICE gathering complete');
             }
         };
         
-        // Create and store offer
+        peerConnection.oniceconnectionstatechange = () => {
+            logSender(`ICE state: ${peerConnection.iceConnectionState}`);
+            if (peerConnection.iceConnectionState === 'connected') {
+                logSender('🎉 ICE connected!');
+            }
+        };
+        
+        // Create offer
         const offer = await peerConnection.createOffer();
         await peerConnection.setLocalDescription(offer);
         
@@ -188,33 +205,31 @@
         
         logSender(`📡 Offer created for code: ${code}`);
         
-        // Listen for answer from receiver
-        const unsubscribe = onSnapshot(doc(db, 'answers', code), async (docSnap) => {
-            if (docSnap.exists() && !peerConnection.currentRemoteDescription) {
-                const answer = docSnap.data().answer;
-                await peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
-                logSender('✅ Answer received from receiver');
-                unsubscribe();
+        // Listen for answer
+        unsubscribeAnswer = onSnapshot(doc(db, 'answers', code), async (docSnap) => {
+            if (docSnap.exists() && peerConnection.signalingState === 'have-local-offer') {
+                const answerData = docSnap.data().answer;
+                await peerConnection.setRemoteDescription(new RTCSessionDescription(answerData));
+                logSender('✅ Answer received!');
             }
         });
         
         // Listen for receiver ICE candidates
-        const candidateUnsub = onSnapshot(doc(db, 'candidates', `${code}_receiver`), async (docSnap) => {
+        unsubscribeReceiverCandidates = onSnapshot(doc(db, 'candidates', `${code}_receiver`), async (docSnap) => {
             if (docSnap.exists() && peerConnection.remoteDescription) {
-                const candidate = docSnap.data().candidate;
+                const cand = docSnap.data().candidate;
                 try {
-                    await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+                    await peerConnection.addIceCandidate(new RTCIceCandidate(cand));
                     logSender('📡 ICE candidate added');
                 } catch(e) { console.warn(e); }
             }
         });
     }
     
-    // RECEIVER: Fetch offer and send answer
+    // RECEIVER: Connect to offer
     async function connectToOffer(code) {
         if (peerConnection) peerConnection.close();
         
-        // Get offer
         const offerDoc = await getDoc(doc(db, 'offers', code));
         if (!offerDoc.exists()) {
             receiverStatus.innerText = `❌ Code ${code} not found`;
@@ -226,9 +241,9 @@
         peerConnection = new RTCPeerConnection(configuration);
         
         peerConnection.ondatachannel = (event) => {
+            logReceiver('📡 Data channel received!');
             dataChannel = event.channel;
             setupReceiverChannel(dataChannel);
-            logReceiver('✅ Data channel established');
         };
         
         peerConnection.onicecandidate = async (event) => {
@@ -238,6 +253,10 @@
                     timestamp: Date.now()
                 });
             }
+        };
+        
+        peerConnection.oniceconnectionstatechange = () => {
+            logReceiver(`ICE state: ${peerConnection.iceConnectionState}`);
         };
         
         await peerConnection.setRemoteDescription(new RTCSessionDescription(offerData));
@@ -251,12 +270,22 @@
         
         receiverStatus.innerText = `✅ Connected! Waiting for file...`;
         logReceiver(`Connected to code: ${code}`);
+        
+        // Clean up offer from Firebase after connection
+        setTimeout(async () => {
+            await deleteDoc(doc(db, 'offers', code)).catch(()=>{});
+        }, 5000);
+        
         return true;
     }
     
     function setupReceiverChannel(channel) {
         receivedChunks = [];
         receivedMetadata = null;
+        
+        channel.onopen = () => {
+            logReceiver('✅ Data channel open');
+        };
         
         channel.onmessage = (event) => {
             if (typeof event.data === 'string') {
@@ -265,7 +294,7 @@
                     if (meta.type === 'metadata') {
                         receivedMetadata = meta.data;
                         receiverStatus.innerText = `📥 Receiving ${receivedMetadata.name}...`;
-                        logReceiver(`Receiving: ${receivedMetadata.name} (${(receivedMetadata.size/1024).toFixed(1)} KB)`);
+                        logReceiver(`Receiving: ${receivedMetadata.name}`);
                     } else if (meta.type === 'complete') {
                         const blob = new Blob(receivedChunks, { type: receivedMetadata?.type || 'application/octet-stream' });
                         const url = URL.createObjectURL(blob);
@@ -280,16 +309,16 @@
                         };
                         downloadBtn.disabled = false;
                         downloadArea.style.display = 'block';
-                        receiverStatus.innerText = `✅ File ready! Click Download.`;
-                        logReceiver(`File transfer complete`);
+                        receiverStatus.innerText = `✅ Ready! Click Download.`;
+                        logReceiver(`File complete (${(blob.size/1024).toFixed(1)} KB)`);
                     }
-                } catch(e) {}
+                } catch(e) { console.warn(e); }
             } else if (event.data instanceof ArrayBuffer) {
                 receivedChunks.push(event.data);
-                const received = receivedChunks.reduce((s, c) => s + c.byteLength, 0);
                 if (receivedMetadata) {
+                    const received = receivedChunks.reduce((s, c) => s + c.byteLength, 0);
                     const percent = ((received / receivedMetadata.size) * 100).toFixed(1);
-                    receiverStatus.innerText = `📥 Receiving... ${percent}%`;
+                    receiverStatus.innerText = `📥 ${percent}%`;
                 }
             }
         };
@@ -297,7 +326,8 @@
     
     function sendFile(file) {
         if (!dataChannel || dataChannel.readyState !== 'open') {
-            logSender('❌ Not connected');
+            logSender(`❌ Data channel not open. State: ${dataChannel?.readyState || 'null'}`);
+            senderStatus.innerText = '❌ Not connected. Wait for receiver.';
             return;
         }
         
@@ -316,13 +346,13 @@
                 dataChannel.send(e.target.result);
                 offset += e.target.result.byteLength;
                 const percent = ((offset / file.size) * 100).toFixed(1);
-                logSender(`📤 Sending... ${percent}%`);
+                logSender(`📤 ${percent}%`);
                 if (offset < file.size) {
                     sendNext();
                 } else {
                     dataChannel.send(JSON.stringify({ type: 'complete' }));
                     logSender(`✅ File sent!`);
-                    senderStatus.innerText = '✅ File sent successfully!';
+                    senderStatus.innerText = '✅ File sent!';
                     sendFileBtn.disabled = true;
                 }
             };
@@ -344,7 +374,7 @@
     // UI Actions
     createCodeBtn.onclick = async () => {
         if (!selectedFile) {
-            alert('Please select a file first');
+            alert('Select a file first');
             return;
         }
         const code = generateCode();
@@ -352,7 +382,7 @@
         displayCode.innerText = code;
         codeArea.style.display = 'block';
         await createOffer(code);
-        senderStatus.innerText = `📢 Code: ${code} - Share with receiver`;
+        senderStatus.innerText = `📢 Code: ${code}`;
         logSender(`Share code: ${code}`);
     };
     
@@ -364,10 +394,10 @@
     };
     
     sendFileBtn.onclick = () => {
-        if (selectedFile && dataChannel?.readyState === 'open') {
+        if (selectedFile) {
             sendFile(selectedFile);
         } else {
-            logSender('No connection. Wait for receiver to connect.');
+            alert('Select a file first');
         }
     };
     
@@ -382,16 +412,19 @@
     
     // Role switching
     senderBtn.onclick = () => {
-        isSender = true;
+        isSenderMode = true;
         senderBtn.classList.add('active');
         receiverBtn.classList.remove('active');
         senderPanel.classList.add('active-panel');
         receiverPanel.classList.remove('active-panel');
         if (peerConnection) peerConnection.close();
+        cleanupListeners();
+        sendFileBtn.disabled = true;
+        codeArea.style.display = 'none';
     };
     
     receiverBtn.onclick = () => {
-        isSender = false;
+        isSenderMode = false;
         receiverBtn.classList.add('active');
         senderBtn.classList.remove('active');
         receiverPanel.classList.add('active-panel');
