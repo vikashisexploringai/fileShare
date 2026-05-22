@@ -1,404 +1,137 @@
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AirShare · Large Files (Chunked Firestore)</title>
-    <style>
-        * { box-sizing: border-box; margin: 0; padding: 0; }
-        body {
-            background: linear-gradient(135deg, #0a2a2a 0%, #0d3d3d 100%);
-            font-family: system-ui, -apple-system, sans-serif;
-            min-height: 100vh;
-            padding: 1.5rem;
-            color: #e0f2f0;
-        }
-        .container { max-width: 1200px; margin: 0 auto; }
-        .header { text-align: center; margin-bottom: 2rem; }
-        h1 { font-size: 2rem; background: linear-gradient(120deg, #a8ffec, #4fc3b7); background-clip: text; -webkit-background-clip: text; color: transparent; }
-        .badge { display: inline-block; background: #1e6b5e; padding: 0.3rem 1rem; border-radius: 40px; font-size: 0.7rem; margin-top: 0.5rem; }
-        .role-selector { display: flex; gap: 1rem; justify-content: center; margin-bottom: 2rem; flex-wrap: wrap; }
-        .role-btn { background: #1c4f4a; border: none; padding: 0.7rem 1.8rem; border-radius: 60px; color: white; font-weight: 600; cursor: pointer; transition: 0.2s; font-size: 1rem; }
-        .role-btn.active { background: #2ecc71; color: #0a2a2a; box-shadow: 0 0 12px #2ecc71; }
-        .panel { background: rgba(18, 45, 45, 0.85); backdrop-filter: blur(12px); border-radius: 2rem; padding: 1.8rem; border: 1px solid #4fc3b7; display: none; margin-bottom: 1rem; }
-        .panel.active-panel { display: block; }
-        .code-card { background: #0a2a2a; border-radius: 1.5rem; padding: 1.5rem; text-align: center; margin: 1.5rem 0; }
-        .big-code { font-size: 3rem; font-weight: 800; letter-spacing: 6px; font-family: monospace; background: linear-gradient(135deg, #2ecc71, #4fc3b7); background-clip: text; -webkit-background-clip: text; color: transparent; }
-        .flex-input { display: flex; gap: 0.6rem; margin: 1rem 0; flex-wrap: wrap; }
-        .flex-input input { flex: 2; padding: 0.9rem; font-size: 1.2rem; text-align: center; font-family: monospace; background: #0a2a2a; border: 2px solid #4fc3b7; border-radius: 1rem; color: #2ecc71; }
-        button { background: #2ecc71; border: none; padding: 0.7rem 1.5rem; border-radius: 60px; font-weight: bold; cursor: pointer; transition: 0.15s; font-size: 0.9rem; color: #0a2a2a; }
-        button:disabled { opacity: 0.5; cursor: not-allowed; }
-        .file-dropzone { border: 2px dashed #4fc3b7; border-radius: 1.2rem; padding: 1.2rem; text-align: center; margin: 1rem 0; cursor: pointer; background: #0e3530; }
-        .status-box { padding: 0.7rem; border-radius: 1rem; margin: 1rem 0; font-size: 0.85rem; background: #0a2a2a; font-family: monospace; }
-        .log { font-family: monospace; font-size: 0.7rem; background: #051a1a; border-radius: 1rem; padding: 0.8rem; max-height: 150px; overflow-y: auto; margin-top: 1rem; }
-        .progress-bar { width: 100%; height: 8px; background: #1a4a44; border-radius: 4px; margin: 10px 0; overflow: hidden; }
-        .progress-fill { height: 100%; background: #2ecc71; width: 0%; transition: width 0.3s; }
-        .warning { background: #5e3a1a; padding: 0.5rem; border-radius: 0.5rem; font-size: 0.7rem; margin-bottom: 1rem; text-align: center; }
-    </style>
+  <meta charset="UTF-8">
+  <title>Simple WebRTC File Share</title>
+  <style>
+    body {
+      font-family: Arial;
+      max-width: 800px;
+      margin: auto;
+      padding: 20px;
+    }
+
+    textarea {
+      width: 100%;
+      height: 120px;
+      margin-top: 10px;
+    }
+
+    button {
+      margin-top: 10px;
+      padding: 10px;
+    }
+
+    #status {
+      margin-top: 20px;
+      font-weight: bold;
+      color: green;
+    }
+  </style>
 </head>
 <body>
-<div class="container">
-    <div class="header">
-        <h1>⚡ AirShare · Large Files (Chunked)</h1>
-        <div class="badge">✅ Handles files up to 50MB using Firestore chunks</div>
-    </div>
 
-    <div class="role-selector">
-        <button class="role-btn" id="senderRoleBtn">📤 Upload & Share</button>
-        <button class="role-btn" id="receiverRoleBtn">📥 Download with Code</button>
-    </div>
+<h2>WebRTC File Share</h2>
 
-    <div id="senderPanel" class="panel">
-        <h2>📤 Upload & Share a file</h2>
-        <div class="warning">📝 Files are split into 900KB chunks and stored in Firestore. Max 50MB total.</div>
-        <div class="file-dropzone" id="senderDropzone">
-            📂 Click to select file (up to 50MB)
-            <input type="file" id="fileInput" style="display: none;">
-        </div>
-        <div id="fileInfo" style="margin: 0.5rem 0; font-size: 0.85rem;"></div>
-        
-        <div class="progress-bar" id="progressBar" style="display: none;">
-            <div class="progress-fill" id="progressFill"></div>
-        </div>
-        
-        <button id="uploadBtn" disabled style="width: 100%; margin: 0.5rem 0;">🚀 Generate Code & Store</button>
-        
-        <div id="codeArea" style="display: none;">
-            <div class="code-card">
-                <p>✨ File stored! Share this code:</p>
-                <div class="big-code" id="displayCode">----</div>
-                <button id="copyCodeBtn">📋 Copy Code</button>
-                <p style="font-size: 0.7rem; margin-top: 10px;">Code expires in 30 minutes</p>
-            </div>
-        </div>
-        
-        <div class="status-box" id="senderStatus">⚡ Select a file (up to 50MB)</div>
-        <div class="log" id="senderLog">📭 Ready.\n</div>
-    </div>
+<button onclick="createOffer()">Create Connection</button>
+<button onclick="createAnswer()">Connect to Offer</button>
 
-    <div id="receiverPanel" class="panel">
-        <h2>📥 Download with code</h2>
-        <div class="flex-input">
-            <input type="text" id="codeInput" placeholder="Enter 6-char code" maxlength="8" style="text-transform: uppercase;">
-            <button id="downloadBtn">🔍 Fetch & Download</button>
-        </div>
-        <div class="progress-bar" id="downloadProgressBar" style="display: none;">
-            <div class="progress-fill" id="downloadProgressFill"></div>
-        </div>
-        <div class="status-box" id="receiverStatus">⏳ Enter code to download</div>
-        <div id="downloadArea" style="display: none;">
-            <button id="saveBtn" style="width: 100%; margin: 1rem 0;">⬇️ Save File</button>
-        </div>
-        <div class="log" id="receiverLog">📭 Enter code to retrieve file.\n</div>
-    </div>
-</div>
+<h3>Your Signal</h3>
+<textarea id="localSignal"></textarea>
 
-<script type="module">
-    const firebaseConfig = {
-        apiKey: "AIzaSyBhujqx9CZwK_NUrQgcUEX5wxKS0hYjXKc",
-        authDomain: "vikash-classes-c98f8.firebaseapp.com",
-        projectId: "vikash-classes-c98f8",
-        storageBucket: "",
-        messagingSenderId: "456891384843",
-        appId: "1:456891384843:web:cf845b07c2884a4c64b30e"
-    };
-    
-    import { initializeApp } from 'https://www.gstatic.com/firebasejs/12.7.0/firebase-app.js';
-    import { getAuth, signInAnonymously } from 'https://www.gstatic.com/firebasejs/12.7.0/firebase-auth.js';
-    import { getFirestore, doc, setDoc, getDoc, deleteDoc } from 'https://www.gstatic.com/firebasejs/12.7.0/firebase-firestore.js';
-    
-    const app = initializeApp(firebaseConfig);
-    const auth = getAuth(app);
-    const db = getFirestore(app, 'shortener');
-    
-    const CHUNK_SIZE = 900 * 1024; // 900KB chunks (leaves room for Base64 overhead)
-    
-    let authReady = false;
-    let selectedFile = null;
-    let currentCode = null;
-    let currentFileData = null;
-    
-    const senderPanel = document.getElementById('senderPanel');
-    const receiverPanel = document.getElementById('receiverPanel');
-    const senderBtn = document.getElementById('senderRoleBtn');
-    const receiverBtn = document.getElementById('receiverRoleBtn');
-    const fileInput = document.getElementById('fileInput');
-    const fileInfo = document.getElementById('fileInfo');
-    const uploadBtn = document.getElementById('uploadBtn');
-    const codeArea = document.getElementById('codeArea');
-    const displayCode = document.getElementById('displayCode');
-    const copyCodeBtn = document.getElementById('copyCodeBtn');
-    const senderStatus = document.getElementById('senderStatus');
-    const senderLog = document.getElementById('senderLog');
-    const codeInput = document.getElementById('codeInput');
-    const downloadBtn = document.getElementById('downloadBtn');
-    const receiverStatus = document.getElementById('receiverStatus');
-    const receiverLog = document.getElementById('receiverLog');
-    const saveBtn = document.getElementById('saveBtn');
-    const downloadArea = document.getElementById('downloadArea');
-    const dropzone = document.getElementById('senderDropzone');
-    const progressBar = document.getElementById('progressBar');
-    const progressFill = document.getElementById('progressFill');
-    const downloadProgressBar = document.getElementById('downloadProgressBar');
-    const downloadProgressFill = document.getElementById('downloadProgressFill');
-    
-    function logSender(msg) { senderLog.innerText += `\n${new Date().toLocaleTimeString()} > ${msg}`; senderLog.scrollTop = senderLog.scrollHeight; }
-    function logReceiver(msg) { receiverLog.innerText += `\n${new Date().toLocaleTimeString()} > ${msg}`; receiverLog.scrollTop = receiverLog.scrollHeight; }
-    
-    function generateCode() {
-        const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ0123456789';
-        let code = '';
-        for (let i = 0; i < 6; i++) code += chars[Math.floor(Math.random() * chars.length)];
-        return code;
-    }
-    
-    async function initAuth() {
-        senderStatus.innerText = '🔐 Authenticating...';
-        receiverStatus.innerText = '🔐 Authenticating...';
-        try {
-            await signInAnonymously(auth);
-            authReady = true;
-            senderStatus.innerText = '✅ Ready! Select a file (up to 50MB).';
-            receiverStatus.innerText = '✅ Ready! Enter code to download.';
-            logSender('✅ Authentication successful');
-            logReceiver('✅ Authentication successful');
-            if (selectedFile) uploadBtn.disabled = false;
-        } catch (error) {
-            logSender(`Auth error: ${error.message}`);
-            logReceiver(`Auth error: ${error.message}`);
-        }
-    }
-    
-    async function storeFileInChunks(file, code) {
-        return new Promise((resolve, reject) => {
-            const reader = new FileReader();
-            reader.onload = async (e) => {
-                const base64Data = e.target.result.split(',')[1]; // Remove data:xxx;base64,
-                const totalChunks = Math.ceil(base64Data.length / CHUNK_SIZE);
-                
-                logSender(`Splitting into ${totalChunks} chunks...`);
-                senderStatus.innerText = `Splitting into ${totalChunks} chunks...`;
-                
-                // Store metadata
-                await setDoc(doc(db, 'fileMetadata', code), {
-                    fileName: file.name,
-                    fileType: file.type,
-                    fileSize: file.size,
-                    totalChunks: totalChunks,
-                    createdAt: Date.now(),
-                    expiresAt: Date.now() + 1800000
-                });
-                
-                // Store each chunk
-                for (let i = 0; i < totalChunks; i++) {
-                    const chunk = base64Data.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE);
-                    await setDoc(doc(db, 'fileChunks', `${code}_chunk_${i}`), {
-                        code: code,
-                        chunkIndex: i,
-                        data: chunk,
-                        timestamp: Date.now()
-                    });
-                    
-                    const percent = ((i + 1) / totalChunks) * 100;
-                    progressFill.style.width = `${percent}%`;
-                    senderStatus.innerText = `Storing chunk ${i + 1}/${totalChunks} (${Math.round(percent)}%)`;
-                    logSender(`Chunk ${i + 1}/${totalChunks} stored`);
-                }
-                
-                resolve(totalChunks);
-            };
-            reader.onerror = reject;
-            reader.readAsDataURL(file);
-        });
-    }
-    
-    async function retrieveFileFromChunks(code) {
-        const metadataDoc = await getDoc(doc(db, 'fileMetadata', code));
-        if (!metadataDoc.exists()) return null;
-        
-        const metadata = metadataDoc.data();
-        if (metadata.expiresAt < Date.now()) {
-            await deleteDoc(doc(db, 'fileMetadata', code));
-            return null;
-        }
-        
-        let allData = '';
-        for (let i = 0; i < metadata.totalChunks; i++) {
-            const chunkDoc = await getDoc(doc(db, 'fileChunks', `${code}_chunk_${i}`));
-            if (!chunkDoc.exists()) return null;
-            allData += chunkDoc.data().data;
-            
-            const percent = ((i + 1) / metadata.totalChunks) * 100;
-            if (downloadProgressFill) downloadProgressFill.style.width = `${percent}%`;
-            receiverStatus.innerText = `Fetching ${i + 1}/${metadata.totalChunks} chunks (${Math.round(percent)}%)`;
-        }
-        
-        return {
-            fileName: metadata.fileName,
-            fileType: metadata.fileType,
-            fileSize: metadata.fileSize,
-            fileData: `data:${metadata.fileType};base64,${allData}`
-        };
-    }
-    
-    async function cleanupChunks(code, totalChunks) {
-        await deleteDoc(doc(db, 'fileMetadata', code)).catch(() => {});
-        for (let i = 0; i < totalChunks; i++) {
-            await deleteDoc(doc(db, 'fileChunks', `${code}_chunk_${i}`)).catch(() => {});
-        }
-    }
-    
-    uploadBtn.onclick = async () => {
-        if (!selectedFile) {
-            alert('Select a file first');
-            return;
-        }
-        
-        if (selectedFile.size > 50 * 1024 * 1024) {
-            alert('File too large! Maximum 50MB.');
-            return;
-        }
-        
-        const code = generateCode();
-        currentCode = code;
-        displayCode.innerText = code;
-        codeArea.style.display = 'block';
-        progressBar.style.display = 'block';
-        
-        uploadBtn.disabled = true;
-        uploadBtn.innerText = 'Storing...';
-        
-        try {
-            const totalChunks = await storeFileInChunks(selectedFile, code);
-            logSender(`✅ File stored! ${totalChunks} chunks. Share code: ${code}`);
-            senderStatus.innerText = `✅ Ready! Code: ${code}`;
-            uploadBtn.innerText = 'Stored ✓';
-        } catch (error) {
-            logSender(`❌ Store failed: ${error.message}`);
-            senderStatus.innerText = 'Store failed';
-            uploadBtn.innerText = 'Retry';
-            uploadBtn.disabled = false;
-            codeArea.style.display = 'none';
-        }
-    };
-    
-    copyCodeBtn.onclick = () => {
-        if (currentCode) {
-            navigator.clipboard.writeText(currentCode);
-            logSender('Code copied');
-        }
-    };
-    
-    downloadBtn.onclick = async () => {
-        const code = codeInput.value.trim().toUpperCase();
-        if (!code) {
-            alert('Enter a code');
-            return;
-        }
-        
-        downloadBtn.disabled = true;
-        downloadBtn.innerText = 'Fetching...';
-        downloadProgressBar.style.display = 'block';
-        receiverStatus.innerText = `Looking for code ${code}...`;
-        logReceiver(`Fetching code: ${code}`);
-        
-        const fileData = await retrieveFileFromChunks(code);
-        
-        if (!fileData) {
-            downloadProgressBar.style.display = 'none';
-            receiverStatus.innerText = `❌ Code "${code}" not found or expired`;
-            logReceiver(`Code not found: ${code}`);
-            downloadBtn.disabled = false;
-            downloadBtn.innerText = '🔍 Fetch & Download';
-            return;
-        }
-        
-        receiverStatus.innerText = `✅ Found: ${fileData.fileName} (${(fileData.fileSize/1024/1024).toFixed(2)} MB)`;
-        logReceiver(`Found: ${fileData.fileName}`);
-        
-        currentFileData = fileData;
-        downloadArea.style.display = 'block';
-        receiverStatus.innerText = `Click Save File to download ${fileData.fileName}`;
-        
-        downloadBtn.disabled = false;
-        downloadBtn.innerText = '🔍 Fetch & Download';
-        codeInput.value = '';
-        downloadProgressBar.style.display = 'none';
-    };
-    
-    saveBtn.onclick = async () => {
-        if (!currentFileData) return;
-        
-        const byteString = atob(currentFileData.fileData.split(',')[1]);
-        const ab = new ArrayBuffer(byteString.length);
-        const ia = new Uint8Array(ab);
-        for (let i = 0; i < byteString.length; i++) {
-            ia[i] = byteString.charCodeAt(i);
-        }
-        const blob = new Blob([ab], { type: currentFileData.fileType });
-        const url = URL.createObjectURL(blob);
-        
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = currentFileData.fileName;
-        a.click();
-        URL.revokeObjectURL(url);
-        
-        logReceiver(`✅ Downloaded: ${currentFileData.fileName}`);
-        receiverStatus.innerText = 'Download complete!';
-        downloadArea.style.display = 'none';
-        
-        // Cleanup
-        const code = codeInput.value.trim().toUpperCase();
-        const totalChunks = Math.ceil(currentFileData.fileData.length / CHUNK_SIZE);
-        if (code) await cleanupChunks(code, totalChunks);
-        currentFileData = null;
-    };
-    
-    fileInput.onchange = (e) => {
-        if (e.target.files[0]) {
-            selectedFile = e.target.files[0];
-            const sizeMB = (selectedFile.size / 1024 / 1024).toFixed(2);
-            
-            if (selectedFile.size > 50 * 1024 * 1024) {
-                fileInfo.innerHTML = `⚠️ ${selectedFile.name} (${sizeMB} MB) - TOO LARGE (max 50MB)`;
-                fileInfo.style.color = '#e74c3c';
-                uploadBtn.disabled = true;
-                senderStatus.innerText = '❌ File too large! Max 50MB.';
-            } else {
-                fileInfo.innerHTML = `📄 ${selectedFile.name} (${sizeMB} MB)`;
-                fileInfo.style.color = '#e0f2f0';
-                uploadBtn.disabled = !authReady;
-                senderStatus.innerText = authReady ? 'Ready to store' : 'Waiting for auth...';
-            }
-            logSender(`Selected: ${selectedFile.name} (${sizeMB} MB)`);
-        }
-    };
-    
-    dropzone.onclick = () => fileInput.click();
-    
-    senderBtn.onclick = () => {
-        senderBtn.classList.add('active');
-        receiverBtn.classList.remove('active');
-        senderPanel.classList.add('active-panel');
-        receiverPanel.classList.remove('active-panel');
-        codeArea.style.display = 'none';
-        progressBar.style.display = 'none';
-        downloadArea.style.display = 'none';
-    };
-    
-    receiverBtn.onclick = () => {
-        receiverBtn.classList.add('active');
-        senderBtn.classList.remove('active');
-        receiverPanel.classList.add('active-panel');
-        senderPanel.classList.remove('active-panel');
-        codeInput.value = '';
-        downloadArea.style.display = 'none';
-        downloadProgressBar.style.display = 'none';
-    };
-    
-    senderBtn.click();
-    initAuth();
+<h3>Paste Remote Signal</h3>
+<textarea id="remoteSignal"></textarea>
+
+<button onclick="applyRemoteSignal()">Apply Remote Signal</button>
+
+<hr>
+
+<input type="file" id="fileInput">
+<button onclick="sendFile()">Send File</button>
+
+<div id="status"></div>
+
+<script>
+let pc = new RTCPeerConnection({
+  iceServers: [
+    { urls: "stun:stun.l.google.com:19302" }
+  ]
+});
+
+let channel;
+
+pc.ondatachannel = event => {
+  channel = event.channel;
+  setupChannel();
+};
+
+function setupChannel() {
+  channel.onopen = () => {
+    document.getElementById("status").innerText =
+      "Connected!";
+  };
+
+  channel.onmessage = async event => {
+    const blob = event.data;
+
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "received_file";
+    a.click();
+  };
+}
+
+async function createOffer() {
+  channel = pc.createDataChannel("fileChannel");
+  setupChannel();
+
+  const offer = await pc.createOffer();
+  await pc.setLocalDescription(offer);
+
+  pc.onicecandidate = () => {
+    document.getElementById("localSignal").value =
+      JSON.stringify(pc.localDescription);
+  };
+}
+
+async function createAnswer() {
+  const remote = JSON.parse(
+    document.getElementById("remoteSignal").value
+  );
+
+  await pc.setRemoteDescription(remote);
+
+  const answer = await pc.createAnswer();
+  await pc.setLocalDescription(answer);
+
+  pc.onicecandidate = () => {
+    document.getElementById("localSignal").value =
+      JSON.stringify(pc.localDescription);
+  };
+}
+
+async function applyRemoteSignal() {
+  const remote = JSON.parse(
+    document.getElementById("remoteSignal").value
+  );
+
+  await pc.setRemoteDescription(remote);
+}
+
+function sendFile() {
+  const file = document.getElementById("fileInput").files[0];
+
+  if (!file) {
+    alert("Choose file first");
+    return;
+  }
+
+  channel.send(file);
+
+  document.getElementById("status").innerText =
+    "File sent!";
+}
 </script>
+
 </body>
 </html>
